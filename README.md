@@ -50,10 +50,13 @@ Si te fijas, cualquier petición debe ser autentificada. Luego formLogin nos ind
 Un Servlet en Java es una clase que se ejecuta en un servidor web y se utiliza para manejar peticiones HTTP (como GET y POST) y generar respuestas dinámicas, típicamente en forma de páginas web HTML. Es una parte fundamental de la tecnología Java EE (ahora Jakarta EE) para el desarrollo de aplicaciones web.
 
 #### Características principales de los Servlets:
-Permiten procesar solicitudes y generar respuestas personalizadas en tiempo de ejecución.
-Independencia de protocolo: Aunque se usan comúnmente con HTTP, pueden manejar otros protocolos.
-Ciclo de vida controlado por el contenedor: El contenedor web (como Tomcat, Jetty o GlassFish) administra el ciclo de vida del servlet.
-Interacción con datos dinámicos: Pueden interactuar con bases de datos, servicios web, archivos y otras fuentes de datos.
+* Permiten procesar solicitudes y generar respuestas personalizadas en tiempo de ejecución.
+  
+* Independencia de protocolo: Aunque se usan comúnmente con HTTP, pueden manejar otros protocolos.
+  
+* Ciclo de vida controlado por el contenedor: El contenedor web (como Tomcat, Jetty o GlassFish) administra el ciclo de vida del servlet.
+  
+* Interacción con datos dinámicos: Pueden interactuar con bases de datos, servicios web, archivos y otras fuentes de datos.
 
 ![image](https://github.com/user-attachments/assets/8b175c1d-924b-4e3d-988c-1d3be39872e1)
 
@@ -542,6 +545,10 @@ public class SecurityConfig {
     }
 }
 ```
+## JWT (Json Web Token)
+
+
+
 
 
 
