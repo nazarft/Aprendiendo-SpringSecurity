@@ -194,67 +194,357 @@ El siguiente paso será crear una clase de configuración:
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
-    
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        return http.build();
+
+       return http
+                .csrf(customizer -> customizer.disable())
+                .authorizeHttpRequests(request -> request.anyRequest().authenticated())
+                .httpBasic(Customizer.withDefaults())
+                .sessionManagement(session ->
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                        )
+                .build();
     }
-    
 }
 ```
+
 En este código estamos indicándole a Spring varias cosas, la primera es que nuestra clase es de configuración mediante la anotación *@Configuration*,
 lo siguiente que le estamos indicando es que esta clase será la encargada de la configuración de la seguridad mediante *@EnableWebSecurity*.
 
 Con nuestro método así, si accedemos a cualquier endpoint no tendremos ninguna restricción.
 
+#### Parámetro HttpSecurity http:
+Es un objeto proporcionado por Spring Security que permite personalizar la configuración de seguridad HTTP.
 
+#### Desactivar CSRF:
 
+```
+.csrf(customizer -> customizer.disable())
+```
+* Desactiva la protección contra ataques CSRF (Cross-Site Request Forgery).
+* Esto es útil para aplicaciones que no manejan sesiones (como las API REST que usan tokens o trabajan en modo stateless).
 
+#### Autorización de solicitudes:
 
-
-
-
-
-
-
-
-
-
-
-## Basic Auth (Autentificación básica)
-
-![image](https://github.com/user-attachments/assets/2ae3029f-f819-4e9f-a381-fbcecc2abe2f)
-
-Para crear una autentifación propia, podemos basarnos con la que nos brinda Spring al principio. Así que creamos nuestra clase SecurityConfig:
 ```java
+.authorizeHttpRequests(request -> request.anyRequest().authenticated())
+```
+* Todas las solicitudes deben estar autenticadas (requieren que el usuario inicie sesión).
+
+#### Autenticación básica (HTTP Basic):
+
+```java
+.httpBasic(Customizer.withDefaults())
+```
+* Configura la autenticación básica (HTTP Basic Authentication).
+
+#### Gestión de sesiones:
+
+```java
+.sessionManagement(session -> 
+        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+)
+```
+* La aplicación no mantendrá sesiones en el servidor.
+* Ideal para API REST que usan tokens (como JWT) para autenticación.
+
+## Usuarios
+
+Hasta ahora, estos filtros que estamos creando nos dan la autorización para poder usar las distintas rutas de nuestro controlador. Sin embargo,
+nosotros no queremos realmente esto ya que estamos creando un usuario y password explícitamente en el application.properties.
+
+Es decir, estamos usando las funciones por defecto que nos brinda SpringSecurity para poder iniciar sesión y tener las autorizaciones necesarias.
+Así que ahora crearemos nuestro forma de identificar al usuario:
+
+
+![image](https://github.com/user-attachments/assets/b5fdc490-c4e5-4375-b015-535b640424a6)
+
+Así que dentro de nuestra clase de configuración agregaremos un nuevo método:
+
+```java
+@Configuration
 @EnableWebSecurity
 public class SecurityConfig {
+
+    @Autowired
+    private UserDetailsService userDetailsService;
+
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        http.authorizeHttpRequests(requests ->
-            requests.anyRequest().authenticated())
-            .httpBasic(Customizer.withDefaults());
-        return http.build();
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+
+       return http
+                .csrf(customizer -> customizer.disable())
+                .authorizeHttpRequests(request -> request.anyRequest().authenticated())
+                .httpBasic(Customizer.withDefaults())
+                .sessionManagement(session ->
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                        )
+                .build();
+    }
+    @Bean
+    public AuthenticationProvider authenticationProvider() {
+        DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
+        provider.setPasswordEncoder(NoOpPasswordEncoder.getInstance());
+        provider.setUserDetailsService(userDetailsService);
+        return provider;
     }
 }
 ```
-La anotación *@EnableWebSecurity* le indica a Spring que configuración usar para la autenticación.
+*Dejaremos la encriptación del password para el siguiente apartado.*
 
-#### Postman
-Si usamos herramientas como Postman, cuando hagamos la petición, debemos indicar nuestra identificación:
+Creamos un repositorio:
+
+```java
+@Repository
+public interface UserRepository extends JpaRepository<User,Integer> {
+    User findByUsername(String username);
+}
+```
+El modelo de datos será:
+```java
+@Entity
+@Table(name = "users")
+public class User {
+    @Id
+    private Integer id;
+    private String username;
+    private String password;
 
 
-![image](https://github.com/user-attachments/assets/5d48454d-f478-4d3b-8da8-fa8c40690037)
+    public Integer getId() {
+        return id;
+    }
+
+    public void setId(Integer id) {
+        this.id = id;
+    }
+
+    public String getUsername() {
+        return username;
+    }
+
+    public void setUsername(String username) {
+        this.username = username;
+    }
+
+    public String getPassword() {
+        return password;
+    }
+
+    public void setPassword(String password) {
+        this.password = password;
+    }
+
+    @Override
+    public String toString() {
+        return "User{" +
+                "id=" + id +
+                ", username='" + username + '\'' +
+                ", password='" + password + '\'' +
+                '}';
+    }
+}
+```
+Lógicamente, agregamos los datos para conectar la base de datos en el *application.properties*:
+```java
+spring.datasource.url=jdbc:mysql://localhost:3306/springsecurity
+spring.datasource.username=root
+spring.datasource.password=12345678
+```
+Entonces, nuestro UserService será tal que así:
+```java
+@Service
+public class MyUserDetailsService implements UserDetailsService {
+
+    @Autowired
+    private UserRepository userRepository;
+    @Override
+    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+        User user = userRepository.findByUsername(username);
+        if(user == null) {
+            System.out.println("User not found");
+            throw new UsernameNotFoundException("User not found");
+        }
+        return new UserPrincipal(user);
+    }
+}
+```
+Si te fijas, devolvemos un **UserPrincipal**, este será nuestro modelo que implementerá **UserDetails**, un modelo que ofrece SpringSecurity 
+que ya viene con métodos predefinidos para ser usados a la hora de crear usuarios:
+```java
+public class UserPrincipal implements UserDetails {
+    private User user;
+    public UserPrincipal(User user) {
+        this.user = user;
+    }
+
+    @Override
+    public Collection<? extends GrantedAuthority> getAuthorities() {
+        return List.of();
+    }
+
+    @Override
+    public String getPassword() {
+        return user.getPassword();
+    }
+
+    @Override
+    public String getUsername() {
+        return user.getUsername();
+    }
+
+    @Override
+    public boolean isAccountNonExpired() {
+        return true;
+    }
+
+    @Override
+    public boolean isAccountNonLocked() {
+        return UserDetails.super.isAccountNonLocked();
+    }
+
+    @Override
+    public boolean isCredentialsNonExpired() {
+        return UserDetails.super.isCredentialsNonExpired();
+    }
+
+    @Override
+    public boolean isEnabled() {
+        return UserDetails.super.isEnabled();
+    }
+}
+```
+Si te fijas, le pasamos al constructor un Usuario que nuestro modelo relacional y cambiamos algunos parametros como la expiración de usuario y devolvemos los valores
+de nombre y password de nuestro modelo.
+
+## Encriptación
+
+Ahora mismo tenemos un problema y es el siguiente:
 
 
-![image](https://github.com/user-attachments/assets/faa2709a-fb69-4e37-976b-561aefbbde4c)
+![image](https://github.com/user-attachments/assets/5c0fa2f9-038c-45d1-a6ac-275fdf2af2d8)
 
-Sin embargo, este método de autenticación no es nada recomendable debido al número tan alto de vulnerabilidades que puede ocasionar.
+Como ves, estamos usando un password visible para todos!!
 
-## Autenticación con JWT
+Imagíante que el usuario usa el mismo password en distintas plataformas, estaríamos entrando en datos privados a los cuales no deberíamos tener acceso.
+
+Nuestro objetivo es encriptar las claves de tal manera que se genere una clave la cual no pueda obtener las credenciales del usuario:
 
 
-![image](https://github.com/user-attachments/assets/4506625a-5143-40db-a3b2-46374be063b3)
+![image](https://github.com/user-attachments/assets/122a4446-a8e5-49dd-93ad-b7812baef606)
+
+Para ello, iremos paso a paso:
+
+En primer lugar, crearemos un controlador **UserController**
+
+```java
+@RestController
+public class UserController {
+
+    @Autowired
+    private UserService userService;
+
+    @PostMapping("/register")
+    public User addUser(@RequestBody  User user) {
+        return userService.registerUser(user);
+    }
+}
+```
+Creamos un servicio llamado **UserService**:
+
+```java
+@Service
+public class UserService {
+    @Autowired
+    private UserRepository userRepository;
+
+    public User registerUser(User user) {
+        return userRepository.save(user);
+    }
+}
+```
+
+Y ya podemos usar los endpoints para crear un nuevo usuario:
+
+![image](https://github.com/user-attachments/assets/b41f114d-151c-46e8-8090-452c44c671f6)
+
+
+Sin embargo, de esta manera aún seguimos usando un password sin hashear.
+
+Por lo tanto, haremos uso de una librería que SpringSecurity trae integrada, se llama **BCrypt**:
+
+```java
+@Service
+public class UserService {
+    @Autowired
+    private UserRepository userRepository;
+
+    private BCryptPasswordEncoder encoder = new BCryptPasswordEncoder(12);
+
+    public User registerUser(User user) {
+        user.setPassword(encoder.encode(user.getPassword()));
+        return userRepository.save(user);
+    }
+}
+```
+
+#### ¿Qué es BCryptPasswordEncoder?
+BCryptPasswordEncoder es una clase de Spring Security que proporciona un mecanismo para codificar contraseñas usando el algoritmo BCrypt. Este algoritmo es ampliamente utilizado para almacenar contraseñas de forma segura, ya que incluye:
+
+* Hashing: Convierte una contraseña en un hash no reversible.
+* Salting: Agrega un valor aleatorio único (salt) al proceso para evitar ataques de diccionario.
+* Work Factor: Permite controlar la dificultad del cálculo del hash.
+
+##### ¿Qué es el número 12 (factor de fuerza)?
+El número 12 es el "cost factor" o "factor de trabajo" para el algoritmo BCrypt. Este valor determina cuántas iteraciones internas se realizan para generar el hash. A mayor número:
+
+Mayor seguridad: Aumenta el tiempo necesario para calcular un hash, lo que hace más difícil realizar ataques de fuerza bruta.
+Mayor consumo de recursos: El cálculo del hash toma más tiempo y CPU.
+El cost factor funciona en una escala logarítmica. Por ejemplo:
+
+Con un cost factor de 10, el cálculo tarda aproximadamente 2ˆ10 = 1024 iteraciones.
+Con un cost factor de 12, el cálculo tarda aproximadamente 2ˆ12 = 4096 iteraciones, lo que es 4 veces más lento que un cost factor de 10.
+
+Y si intentamos crear un usuario:
+![image](https://github.com/user-attachments/assets/4eab751d-a597-4f4d-b10c-786e43e802c4)
+
+Sin embargo, si intentamos acceder a las rutas para *GET:/students* con uno de los usuarios que hemos creado, veremos que recibimos un 401, pero, por que?
+
+La razón es que en nuestra clase de configuración hemos puesto que no se use una encriptación, así que será tan simple como cambiar una línea:
+
+```java
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+
+    @Autowired
+    private UserDetailsService userDetailsService;
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+
+        return http
+                .csrf(customizer -> customizer.disable())
+                .authorizeHttpRequests(request -> request.anyRequest().authenticated())
+                .httpBasic(Customizer.withDefaults())
+                .sessionManagement(session ->
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                )
+                .build();
+    }
+    @Bean
+    public AuthenticationProvider authenticationProvider() {
+        DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
+        provider.setPasswordEncoder(new BCryptPasswordEncoder(12)); // <----------------------
+        provider.setUserDetailsService(userDetailsService);
+        return provider;
+    }
+}
+```
+
+
+
 
 
 
