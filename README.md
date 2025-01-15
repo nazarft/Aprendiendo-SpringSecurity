@@ -547,11 +547,226 @@ public class SecurityConfig {
 ```
 ## JWT (Json Web Token)
 
+JWT (JSON Web Token) es un estándar abierto (RFC 7519) que define una forma compacta y segura de transmitir información entre dos partes como un objeto JSON. Se utiliza comúnmente para autenticar y autorizar usuarios en aplicaciones web y APIs.
 
+### Características
+* Formato Compacto y Auto-Contenido: los JWT están diseñados para ser compactos y fáciles de enviar a través de HTTP (por ejemplo, en los encabezados de autorización).
+Son auto-contenidos, ya que pueden incluir toda la información necesaria para verificar su validez, como el identificador del usuario o roles.
 
+* Componentes de un JWT: Un JWT consta de tres partes separadas por puntos (.):
 
+- Header (Encabezado): Describe el tipo de token (JWT) y el algoritmo de firma usado, como HMAC SHA256 o RSA.
+```json
+{
+  "alg": "HS256",
+  "typ": "JWT"
+}
+```
+- Payload (Carga útil): Contiene las afirmaciones o claims, que son datos como identificadores de usuario, roles, o cualquier otra información relevante:
 
+```json
+{
+  "sub": "1234567890",
+  "name": "John Doe",
+  "admin": true
+}
+```
 
+- Signature (Firma): Es una firma digital generada para garantizar que el token no ha sido alterado. Se crea usando un secreto compartido o una clave privada.
 
+```scss
+HMACSHA256(
+  base64UrlEncode(header) + "." +
+  base64UrlEncode(payload),
+  secret
+)
+```
 
+* Propósito:
+
+1.Autenticación: Los servidores pueden emitir un JWT cuando un usuario inicia sesión correctamente. El cliente almacena este token y lo envía con cada solicitud para acceder a recursos protegidos.
+  
+2.Autorización: Contiene información de roles y permisos, lo que permite a los servidores decidir si un usuario puede realizar una acción específica.
+
+* Seguridad: la información en un JWT no está encriptada, sino codificada en Base64Url. Por lo tanto, puede ser decodificada por cualquiera que tenga el token. Para proteger datos sensibles, es común combinar JWT con HTTPS o encriptar los datos antes de incluirlos en el payload.
+La firma asegura la integridad del token, garantizando que no se haya modificado.
+
+## Agregarlo al proyecto
+
+Para empezar, debemos agregar un **AuthenticationManager** a nuestro archivo de configuración de seguridad:
+
+```java
+ @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
+        return config.getAuthenticationManager();
+    }
+```
+AuthenticationManager es una interfaz central en Spring Security que se encarga de autenticar credenciales proporcionadas por un usuario. Procesa la autenticación y decide si las credenciales son válidas.
+Actúa como un orquestador que delega el proceso de autenticación a implementaciones específicas, como DaoAuthenticationProvider o JwtAuthenticationProvider.
+
+Por otro lado *AuthenticationConfiguration* proporciona acceso a la configuración de autenticación predefinida por Spring Security.
+En este caso, se utiliza para obtener el AuthenticationManager configurado por Spring Security de forma predeterminada.
+
+Luego ya podemos usar nuestro propio login, así que podemos agregarlo a nuestro controlador:
+
+```java
+@PostMapping("/login")
+    public String login(@RequestBody User user) {
+        return userService.verify(user);
+    }
+```
+
+Sin embargo, lógicamente no queremos tener que pedir autenticarnos cada vez que iniciemos sesión o intentemos registrarnos, así que modificaremos nuestros filtros en nuestra clase de configuración:
+
+```java
+@Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+
+        return http
+                .csrf(customizer -> customizer.disable())
+                .authorizeHttpRequests(request -> request
+                        .requestMatchers("register", "login") <---------
+                        .permitAll() <-------------
+                        .anyRequest()
+                        .authenticated())
+                .httpBasic(Customizer.withDefaults())
+                .sessionManagement(session ->
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                )
+                .build();
+    }
+```
+En nuestro *UserService* deberemos crear un método encargado de verificar que estemos autenticados:
+
+```java
+@Service
+public class UserService {
+    @Autowired
+    private UserRepository userRepository;
+    @Autowired
+    private AuthenticationManager authenticationManager;
+
+    private BCryptPasswordEncoder encoder = new BCryptPasswordEncoder(12);
+
+    public User registerUser(User user) {
+        user.setPassword(encoder.encode(user.getPassword()));
+        return userRepository.save(user);
+    }
+
+    public String verify(User user) {
+        Authentication authentication =
+                authenticationManager.authenticate(new UsernamePasswordAuthenticationToken(user.getUsername(), user.getPassword()));
+        if (authentication.isAuthenticated()) {
+            return "User is authenticated";
+        }
+        return "User is not authenticated";
+    }
+}
+```
+Sin embargo, si el usuario está autenticado lo que queremos devolverle es un *token*. Esta lógica la podríamos hacer en el mismo UserService, pero en mi caso crearé un nuevo servicio llamado *JWTService*.
+
+```java
+@Service
+public class JWTService {
+    public String generateToken(User user) {
+        
+    }
+}
+```
+E inyectamos el servicio en nuestro *UserService*:
+
+```java
+@Autowired
+    private JWTService jwtService;
+```
+
+## Generar tokens
+
+```java
+@Service
+public class JWTService {
+    @Value("${jwt.secret-key}")
+    private String secretKey = "";
+
+    public String generateToken(String username) {
+
+        Map<String, Object> claims = new HashMap<>();
+
+        return Jwts.builder()
+                .claims()
+                .add(claims)
+                .subject(username)
+                .issuedAt(new Date(System.currentTimeMillis()))
+                .setExpiration(new Date(System.currentTimeMillis() + 1000 * 60 * 30))
+                .and()
+                .signWith(getkey())
+                .compact();
+
+    }
+
+    private Key getkey() {
+            byte[] keyBytes = Decoders.BASE64.decode(secretKey);
+            return Keys.hmacShaKeyFor(keyBytes);
+    }
+}
+```
+La clave para firmar la obtendremos del *application.properties*:
+
+```java
+jwt.secret-key = CLAVE SECRETA
+```
+*  Propiedad secretKey
+```java
+private String secretKey;
+```
+Es una cadena vacía que se llenará con la clave secreta codificada en Base64 cuando se genere la clave HMAC SHA-256.
+
+* Método generateToken
+
+```java
+public String generateToken(String username) {
+    Map<String, Object> claims = new HashMap<>();
+    return Jwts.builder()
+            .claims()
+            .add(claims)
+            .subject(username)
+            .issuedAt(new Date(System.currentTimeMillis()))
+            .setExpiration(new Date(System.currentTimeMillis() + 60 * 60 * 30))
+            .and()
+            .signWith(getkey())
+            .compact();
+}
+```
+
+- claims:Un mapa que puede contener información adicional (claims personalizados) que deseas incluir en el token.
+En este caso, está vacío.
+
+- Jwts.builder(): Construye un JWT. La librería JJWT se utiliza para manejar la creación y validación de tokens JWT.
+
+- .claims().add(claims): asigna los claims.
+  
+- .subject(username): establece el subject del token, que en este caso es el nombre del usuario.
+
+- .issuedAt(new Date(...)): establece la fecha de emisión del token.
+
+- .setExpiration(new Date(...)): define la fecha de expiración del token.
+  
+- .signWith(getkey()): firma el token con una clave secreta obtenida del método getkey().
+  
+- .compact(): finaliza la construcción del token y devuelve el token JWT como una cadena.
+
+* Método getKey()
+
+```java
+private Key getkey() {
+        byte[] keyBytes = Decoders.BASE64.decode(secretKey);
+        return Keys.hmacShaKeyFor(keyBytes);
+}
+```
+
+- Decoders.BASE64.decode(secretKey): decodifica la clave secreta de Base64 a un array de bytes.
+  
+- Keys.hmacShaKeyFor(keyBytes): convierte los bytes decodificados en una clave HMAC válida para firmar el token JWT.
+
+## Validar token
 
