@@ -770,3 +770,141 @@ private Key getkey() {
 
 ## Validar token
 
+El siguiente paso que queremos hacer es que el usuario tenga que poder validarse para poder usar rutas específicas. Para ello, haremos uso de **filtros**.
+
+![image](https://github.com/user-attachments/assets/d6eab587-5e3a-4638-b1c3-6a9c3426d5b4)
+
+Para ello seguiremos los siguientes pasos:
+
+```java
+@Autowired
+    private UserDetailsService userDetailsService;
+
+    @Autowired
+    private JWTFilter jwtFilter;
+ @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+
+        return http
+                .csrf(customizer -> customizer.disable())
+                .authorizeHttpRequests(request -> request
+                        .requestMatchers("/api/auth/**")
+                        .permitAll()
+                        .anyRequest()
+                        .authenticated())
+                .httpBasic(Customizer.withDefaults())
+                .sessionManagement(session ->
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                )
+                .authenticationProvider(authenticationProvider())
+                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class) <------------- 
+                .build();
+    }
+    @Bean
+    public AuthenticationProvider authenticationProvider() {
+        DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
+        provider.setPasswordEncoder(new BCryptPasswordEncoder(12));
+        provider.setUserDetailsService(userDetailsService);
+        return provider;
+    }
+
+    @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
+        return config.getAuthenticationManager();
+    }
+```
+Agregamos nuestro filtro llamado JwtFilter, la línea hace lo siguiente: "Autenticate y agrega un filtro antes de verificarte con nombre de usuario y password y usa el filtro personalizado".
+
+Nuestro JWTFilter luce así:
+```java
+@Component
+public class JWTFilter extends OncePerRequestFilter {
+
+    @Autowired
+    private JWTService jwtService;
+    @Autowired // Si da problemas usar ApplicationContext
+    private MyUserDetailsService myUserDetailsService;
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
+    String authorizationHeader = request.getHeader("Authorization");
+    String token = null;
+    String username = null;
+
+    if (authorizationHeader != null && authorizationHeader.startsWith("Bearer ")) {
+        token = authorizationHeader.substring(7);
+        username = jwtService.extractUsername(token);
+    }
+    if(username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+        UserDetails userDetails = myUserDetailsService.loadUserByUsername(username);
+        if(jwtService.isTokenValid(token, userDetails)) {
+            // Agregamos el siguiente filtro
+            UsernamePasswordAuthenticationToken usernamePasswordAuthenticationToken = new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
+            usernamePasswordAuthenticationToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+            SecurityContextHolder.getContext().setAuthentication(usernamePasswordAuthenticationToken);
+        }
+    }
+    filterChain.doFilter(request, response);
+}
+}
+```
+
+Si te fijas, llamamos a nuestro JWTService para realizar ciertos métodos, así que en el nuestro agregamos los métodos que faltan:
+
+```java
+@Service
+public class JWTService {
+    @Value("${jwt.secret-key}")
+    private String secretKey = "";
+
+    public String generateToken(String username) {
+
+        Map<String, Object> claims = new HashMap<>();
+
+        return Jwts.builder()
+                .claims()
+                .add(claims)
+                .subject(username)
+                .issuedAt(new Date(System.currentTimeMillis()))
+                .setExpiration(new Date(System.currentTimeMillis() + 1000 * 60 * 30))
+                .and()
+                .signWith(getkey())
+                .compact();
+
+    }
+
+
+    private Key getkey() {
+            byte[] keyBytes = Decoders.BASE64.decode(secretKey);
+            return Keys.hmacShaKeyFor(keyBytes);
+    }
+
+    // Comprobamos que el token sea igual al token del usuario y que no haya expirado
+    public boolean isTokenValid(String token, UserDetails userDetails) {
+        final String username = extractUsername(token);
+        return (username.equals(userDetails.getUsername()) && !isTokenExpired(token));
+    }
+
+    public String extractUsername(String token) {
+        return extractClaim(token, Claims::getSubject);
+    }
+    private <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
+        final Claims claims = extractAllClaims(token);
+        return claimsResolver.apply(claims);
+    }
+    private Claims extractAllClaims(String token) {
+        return Jwts
+                .parser()
+                .setSigningKey(getkey())
+                .build()
+                .parseClaimsJws(token)
+                .getBody();
+    }
+    private boolean isTokenExpired(String token) {
+        return extractExpiration(token).before(new Date());
+    }
+    private Date extractExpiration(String token) {
+        return extractClaim(token, Claims::getExpiration);
+    }
+}
+```
